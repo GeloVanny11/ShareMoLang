@@ -132,8 +132,26 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         incomingDialog?.dismiss()
-        client.stopAllEndpoints()
+        stopNearby()
         super.onDestroy()
+    }
+
+    /** Stops every Bluetooth / Wi-Fi use by this app: advertising, scanning and all connections. */
+    private fun stopNearby() {
+        client.stopAdvertising()
+        client.stopDiscovery()
+        client.stopAllEndpoints()
+    }
+
+    private fun closeApp() {
+        stopNearby()
+        finishAndRemoveTask()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        // Android doesn't let apps switch Bluetooth off, so offer a one-tap way to do it.
+        if (started && isBtOn()) showExit() else super.onBackPressed()
     }
 
     // ---------- permissions and switches ----------
@@ -256,17 +274,6 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(0, 0, 0, dp(16))
         }
-        val logo = FrameLayout(this).apply {
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(Color.parseColor("#5B84FF"), Color.parseColor("#1B3FD6"))
-            ).apply { cornerRadius = dp(14).toFloat() }
-            clipToOutline = true; outlineProvider = ViewOutlineProvider.BACKGROUND
-        }
-        logo.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_launcher_foreground); scaleX = 1.55f; scaleY = 1.55f
-        }, FrameLayout.LayoutParams(MATCH, MATCH))
-        head.addView(logo, lp(dp(46), dp(46)).apply { rightMargin = dp(12) })
         val word = SpannableString("ShareMoLang").apply {
             setSpan(ForegroundColorSpan(accent), 5, 7, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
@@ -547,7 +554,6 @@ class MainActivity : Activity() {
     /** Custom bottom-sheet popup shown to the receiver instead of the default Android dialog. */
     private fun showAccept(id: String, info: ConnectionInfo) {
         val d = Dialog(this)
-        d.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
             background = shape(Color.WHITE, 28); setPadding(dp(22), dp(24), dp(22), dp(20))
@@ -570,12 +576,20 @@ class MainActivity : Activity() {
         btns.addView(pill("Accept", true) { d.dismiss(); client.acceptConnection(id, payloadCb) },
             lp(0, dp(52), 1f).apply { leftMargin = dp(6) })
         card.addView(btns, lp(MATCH, WRAP))
+        d.setCancelable(false)
+        incomingDialog?.dismiss()
+        incomingDialog = d
+        presentSheet(d, card)
+    }
+
+    /** Dialog that slides up from the bottom as a rounded floating card. */
+    private fun presentSheet(d: Dialog, card: LinearLayout) {
+        d.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val frame = FrameLayout(this).apply {
             setPadding(dp(14), 0, dp(14), dp(14))
             addView(card, FrameLayout.LayoutParams(MATCH, WRAP))
         }
         d.setContentView(frame)
-        d.setCancelable(false)
         d.window?.apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             setLayout(MATCH, WRAP)
@@ -583,9 +597,27 @@ class MainActivity : Activity() {
             setWindowAnimations(android.R.style.Animation_InputMethod)
             setDimAmount(0.5f)
         }
-        incomingDialog?.dismiss()
-        incomingDialog = d
         d.show()
+    }
+
+    /** Shown when you press Back: closes the app and offers to open Bluetooth settings. */
+    private fun showExit() {
+        val d = Dialog(this)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+            background = shape(Color.WHITE, 28); setPadding(dp(22), dp(24), dp(22), dp(20))
+        }
+        card.addView(tv("\uD83D\uDC4B", 28f, ink).apply { gravity = Gravity.CENTER; background = shape(soft, 32) }, lp(dp(64), dp(64)))
+        card.addView(tv("Done sharing?", 21f, ink, true).apply { gravity = Gravity.CENTER; setPadding(0, dp(14), 0, dp(4)) })
+        card.addView(tv("Closing stops ShareMoLang from using Bluetooth and Wi\u2011Fi. Android doesn\u2019t let apps switch Bluetooth off, so you can turn it off yourself to save battery.", 14f, muted).apply { gravity = Gravity.CENTER })
+        val btns = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(20), 0, 0) }
+        btns.addView(pill("Close app", true) { d.dismiss(); closeApp() }, lp(MATCH, dp(52)))
+        btns.addView(pill("Close and turn off Bluetooth", false) {
+            d.dismiss(); closeApp(); startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+        }, lp(MATCH, dp(52)).apply { topMargin = dp(10) })
+        card.addView(btns, lp(MATCH, WRAP))
+        d.setCancelable(true)
+        presentSheet(d, card)
     }
 
     private fun sendFiles(id: String) {
