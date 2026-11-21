@@ -2,7 +2,7 @@ package com.hop.share
 
 import android.Manifest
 import android.app.Activity
-import android.app.AlertDialog
+import android.app.Dialog
 import android.bluetooth.BluetoothManager
 import android.content.ContentValues
 import android.content.Context
@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.location.LocationManager
 import android.net.Uri
@@ -23,12 +24,16 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.provider.Settings
+import android.text.SpannableString
+import android.text.Spanned
 import android.text.TextUtils
+import android.text.style.ForegroundColorSpan
 import android.util.Size
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
+import android.view.Window
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
@@ -96,6 +101,7 @@ class MainActivity : Activity() {
     private lateinit var speedTv: TextView
     private lateinit var bar: ProgressBar
     private val ui = Handler(Looper.getMainLooper())
+    private var incomingDialog: Dialog? = null
     private val rows = ArrayList<Row>()
 
     private val peers = LinkedHashMap<String, Peer>()
@@ -125,6 +131,7 @@ class MainActivity : Activity() {
     override fun onResume() { super.onResume(); refreshState() }
 
     override fun onDestroy() {
+        incomingDialog?.dismiss()
         client.stopAllEndpoints()
         super.onDestroy()
     }
@@ -249,13 +256,33 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(0, 0, 0, dp(16))
         }
-        head.addView(tv("ShareMoLang", 26f, ink, true), lp(0, WRAP, 1f))
+        val logo = FrameLayout(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(Color.parseColor("#5B84FF"), Color.parseColor("#1B3FD6"))
+            ).apply { cornerRadius = dp(14).toFloat() }
+            clipToOutline = true; outlineProvider = ViewOutlineProvider.BACKGROUND
+        }
+        logo.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_launcher_foreground); scaleX = 1.55f; scaleY = 1.55f
+        }, FrameLayout.LayoutParams(MATCH, MATCH))
+        head.addView(logo, lp(dp(46), dp(46)).apply { rightMargin = dp(12) })
+        val word = SpannableString("ShareMoLang").apply {
+            setSpan(ForegroundColorSpan(accent), 5, 7, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        val titleCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        titleCol.addView(TextView(this).apply {
+            text = word; textSize = 22f; setTextColor(ink); letterSpacing = -0.01f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        })
+        titleCol.addView(tv("Share to anyone nearby", 12.5f, muted))
+        head.addView(titleCol, lp(0, WRAP, 1f))
         val me = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             background = shape(Color.WHITE, 24); setPadding(dp(12), dp(7), dp(14), dp(7))
         }
         me.addView(tv("\u25CF ", 12f, good))
-        me.addView(tv(myName.take(12), 13f, ink).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END })
+        me.addView(tv(myName.take(10), 13f, ink).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END })
         head.addView(me)
         col.addView(head)
 
@@ -497,13 +524,7 @@ class MainActivity : Activity() {
                 client.acceptConnection(id, payloadCb)
             } else {
                 showTab(1) // someone is sending to us: jump to the Receive tab
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("${info.endpointName} wants to send you files")
-                    .setMessage("Both phones should show the code ${info.authenticationToken}.")
-                    .setCancelable(false)
-                    .setPositiveButton("Accept") { _, _ -> client.acceptConnection(id, payloadCb) }
-                    .setNegativeButton("Decline") { _, _ -> client.rejectConnection(id) }
-                    .show()
+                showAccept(id, info)
             }
         }
         override fun onConnectionResult(id: String, r: ConnectionResolution) {
@@ -518,8 +539,53 @@ class MainActivity : Activity() {
         override fun onDisconnected(id: String) {
             if (id == outgoing) outgoing = null
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            incomingDialog?.dismiss()
             ui.post { if (started) startNearby(); if (done.isEmpty()) refresh() }
         }
+    }
+
+    /** Custom bottom-sheet popup shown to the receiver instead of the default Android dialog. */
+    private fun showAccept(id: String, info: ConnectionInfo) {
+        val d = Dialog(this)
+        d.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+            background = shape(Color.WHITE, 28); setPadding(dp(22), dp(24), dp(22), dp(20))
+        }
+        card.addView(tv("\uD83D\uDCF1", 28f, ink).apply { gravity = Gravity.CENTER; background = shape(soft, 32) }, lp(dp(64), dp(64)))
+        card.addView(tv(info.endpointName, 21f, ink, true).apply {
+            gravity = Gravity.CENTER; maxLines = 1; ellipsize = TextUtils.TruncateAt.END; setPadding(0, dp(14), 0, 0)
+        })
+        card.addView(tv("wants to send you files", 15f, muted).apply { gravity = Gravity.CENTER })
+        card.addView(tv("Make sure this code matches on both phones", 13f, muted).apply {
+            gravity = Gravity.CENTER; setPadding(0, dp(18), 0, dp(8))
+        })
+        card.addView(tv(info.authenticationToken, 24f, accent, true).apply {
+            gravity = Gravity.CENTER; typeface = Typeface.MONOSPACE; letterSpacing = 0.12f
+            background = shape(soft, 16); setPadding(dp(22), dp(10), dp(22), dp(10))
+        }, lp(WRAP, WRAP))
+        val btns = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(22), 0, 0) }
+        btns.addView(pill("Decline", false) { d.dismiss(); client.rejectConnection(id) },
+            lp(0, dp(52), 1f).apply { rightMargin = dp(6) })
+        btns.addView(pill("Accept", true) { d.dismiss(); client.acceptConnection(id, payloadCb) },
+            lp(0, dp(52), 1f).apply { leftMargin = dp(6) })
+        card.addView(btns, lp(MATCH, WRAP))
+        val frame = FrameLayout(this).apply {
+            setPadding(dp(14), 0, dp(14), dp(14))
+            addView(card, FrameLayout.LayoutParams(MATCH, WRAP))
+        }
+        d.setContentView(frame)
+        d.setCancelable(false)
+        d.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setLayout(MATCH, WRAP)
+            setGravity(Gravity.BOTTOM)
+            setWindowAnimations(android.R.style.Animation_InputMethod)
+            setDimAmount(0.5f)
+        }
+        incomingDialog?.dismiss()
+        incomingDialog = d
+        d.show()
     }
 
     private fun sendFiles(id: String) {
